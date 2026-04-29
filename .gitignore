@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Streamlit secrets (nunca commitar)
+.streamlit/secrets.toml
+
+# Exports gerados pelo app (não versionar)
+exports/*.csv
+exports/*.xlsx
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
