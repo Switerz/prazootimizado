@@ -55,12 +55,13 @@ def detect_default_file(base: str | None = None) -> pathlib.Path | None:
     here = pathlib.Path(__file__).parent.parent
     project = here.parent
     if base in EXPORT_PATTERNS:
-        files = [
-            p for p in (project / "exports").glob(EXPORT_PATTERNS[base])
-            if p.is_file() and not p.name.startswith("~$")
-        ]
-        if files:
-            return max(files, key=lambda p: p.stat().st_mtime)
+        for folder in [here / "data", here / "exports", project / "exports"]:
+            files = [
+                p for p in folder.glob(EXPORT_PATTERNS[base])
+                if p.is_file() and not p.name.startswith("~$")
+            ]
+            if files:
+                return max(files, key=lambda p: p.stat().st_mtime)
     candidates = [
         here / "data" / DEFAULT_FILENAME,
         project / "exports" / DEFAULT_FILENAME,
