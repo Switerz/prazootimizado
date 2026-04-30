@@ -32,16 +32,25 @@ _LAYOUT = dict(
 
 # ── Sprint 2 — KPIs Executivos ────────────────────────────────────────────────
 
-def build_waterfall_kpi() -> go.Figure:
+def build_waterfall_kpi(
+    pmp_atual: float | None = None,
+    pmp_recomendado: float | None = None,
+) -> go.Figure:
     """Waterfall: PMP Atual → Ganho estimado → PMP Recomendado."""
-    ganho = PMP_RECOMENDADO_TOTAL - PMP_ATUAL_TOTAL  # negativo
+    pmp_atual = PMP_ATUAL_TOTAL if pmp_atual is None or pd.isna(pmp_atual) else float(pmp_atual)
+    pmp_recomendado = (
+        PMP_RECOMENDADO_TOTAL
+        if pmp_recomendado is None or pd.isna(pmp_recomendado)
+        else float(pmp_recomendado)
+    )
+    ganho = pmp_recomendado - pmp_atual  # negativo = ganho de PMP
 
     fig = go.Figure(go.Waterfall(
         orientation="v",
         measure=["absolute", "relative", "total"],
         x=["PMP Atual", "Ganho Estimado", "PMP Recomendado"],
-        y=[PMP_ATUAL_TOTAL, ganho, PMP_RECOMENDADO_TOTAL],
-        text=[f"<b>{PMP_ATUAL_TOTAL:.2f} d</b>", f"<b>{ganho:+.2f} d</b>", f"<b>{PMP_RECOMENDADO_TOTAL:.2f} d</b>"],
+        y=[pmp_atual, ganho, pmp_recomendado],
+        text=[f"<b>{pmp_atual:.2f} d</b>", f"<b>{ganho:+.2f} d</b>", f"<b>{pmp_recomendado:.2f} d</b>"],
         textposition="outside",
         textfont=dict(size=13, color="#FFFFFF"),
         connector=dict(line=dict(color="rgba(255,255,255,0.12)", width=1, dash="dot")),
@@ -54,7 +63,10 @@ def build_waterfall_kpi() -> go.Figure:
         yaxis_title="Dias",
         showlegend=False,
         height=340,
-        yaxis=dict(**_AXIS, range=[3.0, 4.1]),
+        yaxis=dict(**_AXIS, range=[
+            max(0.0, min(pmp_atual, pmp_recomendado) - 0.4),
+            max(pmp_atual, pmp_recomendado) + 0.4,
+        ]),
         **{k: v for k, v in _LAYOUT.items() if k not in ("xaxis", "yaxis")},
     )
     return fig
@@ -84,31 +96,46 @@ def build_type_distribution(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def build_sla_comparison() -> go.Figure:
+def build_sla_comparison(
+    sla_baseline: float | None = None,
+    sla_recomendado: float | None = None,
+) -> go.Figure:
     """Gráfico de barras comparando SLA baseline vs recomendado."""
+    sla_baseline = (
+        SLA_BASELINE_TOTAL
+        if sla_baseline is None or pd.isna(sla_baseline)
+        else float(sla_baseline)
+    )
+    sla_recomendado = (
+        SLA_RECOMENDADO_TOTAL
+        if sla_recomendado is None or pd.isna(sla_recomendado)
+        else float(sla_recomendado)
+    )
     fig = go.Figure()
     fig.add_trace(go.Bar(
         name="SLA Baseline",
         x=["SLA"],
-        y=[SLA_BASELINE_TOTAL * 100],
+        y=[sla_baseline * 100],
         marker_color=AZUL,
-        text=[f"{SLA_BASELINE_TOTAL*100:.1f}%"],
+        text=[f"{sla_baseline*100:.1f}%"],
         textposition="outside",
     ))
     fig.add_trace(go.Bar(
         name="SLA Recomendado",
         x=["SLA"],
-        y=[SLA_RECOMENDADO_TOTAL * 100],
+        y=[sla_recomendado * 100],
         marker_color=VERDE,
-        text=[f"{SLA_RECOMENDADO_TOTAL*100:.1f}%"],
+        text=[f"{sla_recomendado*100:.1f}%"],
         textposition="outside",
     ))
+    y_min = max(0.0, min(sla_baseline, sla_recomendado) * 100 - 2.0)
+    y_max = min(100.0, max(sla_baseline, sla_recomendado) * 100 + 2.0)
     fig.update_layout(
         title="SLA: Baseline vs Recomendado",
         yaxis_title="%",
         barmode="group",
         height=300,
-        yaxis_range=[93, 98],
+        yaxis_range=[y_min, y_max],
         **_LAYOUT,
     )
     return fig

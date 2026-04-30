@@ -412,13 +412,19 @@ with tabs[0]:
 
     col_wf, col_dist = st.columns([3, 2])
     with col_wf:
-        st.plotly_chart(build_waterfall_kpi(), use_container_width=True)
+        st.plotly_chart(
+            build_waterfall_kpi(PMP_ATUAL_DASH, PMP_RECOMENDADO_DASH),
+            use_container_width=True,
+        )
     with col_dist:
         st.plotly_chart(build_type_distribution(df_filtered), use_container_width=True)
 
     col_sla, col_uf = st.columns([2, 3])
     with col_sla:
-        st.plotly_chart(build_sla_comparison(), use_container_width=True)
+        st.plotly_chart(
+            build_sla_comparison(SLA_BASELINE_DASH, SLA_RECOMENDADO_DASH),
+            use_container_width=True,
+        )
     with col_uf:
         st.plotly_chart(
             build_ranking_chart(df_filtered, "uf_primaria", "impacto_pond",
