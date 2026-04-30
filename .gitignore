@@ -13,6 +13,7 @@ venv/
 # Exports gerados pelo app (não versionar)
 exports/*.csv
 exports/*.xlsx
+streamlit_*.log
 
 # Jupyter
 .ipynb_checkpoints/

@@ -7,25 +7,36 @@ import streamlit as st
 
 # Mapeamento: nome canônico → lista de aliases possíveis no arquivo
 COLUMN_ALIASES: dict[str, list[str]] = {
-    "transportadora": ["transportadora", "delivery_service", "carrier"],
+    "base":           ["base"],
+    "cenario":        ["cenario", "strategy"],
+    "transportadora": ["transportadora", "delivery_service", "carrier", "servico"],
     "ccep":           ["CCEP", "ccep", "cep"],
-    "prazo_recomendado": ["prazo rec", "prazo_rec", "prazo_recomendado", "k_star"],
-    "sla_esperado":   ["SLA esperado", "sla_esperado", "sla esperado"],
-    "prazo_atual":    ["prazo atual", "prazo_atual", "baseline_delivery_days_mean"],
-    "_ganho_raw":     ["diff_prazo"],          # arquivo: prazo_atual - prazo_rec
+    "prazo_recomendado": ["prazo rec", "prazo_rec", "prazo_recomendado", "k_star", "prazo_recomendado_dias_uteis"],
+    "sla_esperado":   ["SLA esperado", "sla_esperado", "sla esperado", "sla_recomendado_grupo"],
+    "sla_baseline":   ["sla_baseline_grupo"],
+    "sla_portfolio":  ["sla_portfolio_cenario"],
+    "pmp_portfolio":  ["pmp_portfolio_cenario"],
+    "prazo_atual":    ["prazo atual", "prazo_atual", "baseline_delivery_days_mean", "prazo_atual_dias_uteis"],
+    "_ganho_raw":     ["diff_prazo", "delta_prazo_dias_uteis"],          # arquivo: prazo_atual - prazo_rec
     "cepi":           ["CEPI", "cepi"],
     "cepf":           ["CEPF", "cepf"],
-    "share_base_decimal": ["share%", "share_%_base_total", "share"],
+    "share_base_decimal": ["share%", "share_%_base_total", "share", "share_base_total_pct", "share_base_pct"],
     "uf":             ["UF", "uf"],
     "cidade":         ["cidade", "Cidade"],
-    "qtd_pedidos":    ["qtd_pedidos", "volume", "pedidos"],
-    "fhat_at_k":      ["Fhat_at_k", "fhat_at_k"],
-    "lb_at_k":        ["LB_at_k", "lb_at_k"],
-    "n_eff_at_k":     ["N_eff_at_k", "n_eff_at_k"],
+    "qtd_pedidos":    ["qtd_pedidos", "volume", "pedidos", "n_obs"],
+    "fhat_at_k":      ["Fhat_at_k", "fhat_at_k", "fhat_modelo"],
+    "lb_at_k":        ["LB_at_k", "lb_at_k", "lb_modelo"],
+    "n_eff_at_k":     ["N_eff_at_k", "n_eff_at_k", "n_eff_modelo"],
     "decision_mode":  ["decision_mode"],
+    "guardrail_status": ["guardrail_status"],
+    "guardrail_reason": ["guardrail_reason"],
 }
 
 DEFAULT_FILENAME = "prazo_otimizado_brasil_fhat96_20260428_1716.xlsx"
+EXPORT_PATTERNS = {
+    "gocase": "prazo_otimizado_brasil_gocase_*.xlsx",
+    "gobeaute": "prazo_otimizado_brasil_gobeaute_*.xlsx",
+}
 
 
 @st.cache_data(show_spinner=False)
@@ -39,12 +50,20 @@ def load_excel(source) -> dict[str, pd.DataFrame]:
         return {}
 
 
-def detect_default_file() -> pathlib.Path | None:
+def detect_default_file(base: str | None = None) -> pathlib.Path | None:
     """Procura o arquivo Excel padrão em pastas conhecidas."""
     here = pathlib.Path(__file__).parent.parent
+    project = here.parent
+    if base in EXPORT_PATTERNS:
+        files = [
+            p for p in (project / "exports").glob(EXPORT_PATTERNS[base])
+            if p.is_file() and not p.name.startswith("~$")
+        ]
+        if files:
+            return max(files, key=lambda p: p.stat().st_mtime)
     candidates = [
         here / "data" / DEFAULT_FILENAME,
-        here.parent / "exports" / DEFAULT_FILENAME,
+        project / "exports" / DEFAULT_FILENAME,
     ]
     for p in candidates:
         if p.exists():
@@ -55,7 +74,7 @@ def detect_default_file() -> pathlib.Path | None:
 def get_main_sheet(sheets: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, list[str]]:
     """Detecta e retorna a aba principal de recomendações."""
     warnings: list[str] = []
-    preferred = ["df_gold", "gold", "recomendacoes", "recommendations"]
+    preferred = ["streamlit_input", "df_gold", "df_estrategias", "gold", "recomendacoes", "recommendations"]
     for name in preferred:
         if name in sheets:
             return sheets[name].copy(), warnings
@@ -152,6 +171,12 @@ def prepare_recommendations(df: pd.DataFrame) -> pd.DataFrame:
         return "Sem alteração"
 
     df["tipo_recomendacao"] = df["diff_prazo"].apply(_tipo)
+    df["tipo_recomendacao"] = df["tipo_recomendacao"].replace({
+        "reducao_pmp": "Redução de prazo",
+        "recuperacao_sla": "Aumento de prazo",
+        "Reducao PMP": "Redução de prazo",
+        "Recuperacao SLA": "Aumento de prazo",
+    })
 
     # impactos ponderados
     peso = df["share_base_decimal"].fillna(0)
@@ -172,10 +197,19 @@ def prepare_recommendations(df: pd.DataFrame) -> pd.DataFrame:
 
     # CCEP como string com zero-fill
     if "ccep" in df.columns:
-        df["ccep_str"] = df["ccep"].astype(str).str.zfill(3)
+        df["ccep_str"] = (
+            df["ccep"].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.zfill(3)
+        )
     else:
         df["ccep"] = np.nan
         df["ccep_str"] = "N/A"
+
+    if "cenario" not in df.columns:
+        df["cenario"] = "default"
+    if "base" not in df.columns:
+        df["base"] = "desconhecida"
 
     return df
 

@@ -6,6 +6,7 @@ Recomendações de ajuste de PMP por transportadora, UF e CCEP com proteção de
 import pathlib
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from src.data_loader import (
@@ -141,6 +142,40 @@ st.markdown(_CSS, unsafe_allow_html=True)
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
+def _as_num(series_or_value):
+    return pd.to_numeric(series_or_value, errors="coerce")
+
+
+def _sheet(name: str) -> pd.DataFrame:
+    """Return a workbook sheet or an empty DataFrame."""
+    return sheets.get(name, pd.DataFrame()).copy()
+
+
+def _format_strategy_name(value) -> str:
+    return str(value).replace("_", " ").title()
+
+
+def _active_strategy() -> str | None:
+    """Infer the active strategy from the sidebar filter / current dataset."""
+    selected = filters.get("cenario") if "filters" in globals() else None
+    if selected:
+        return selected[0]
+    if "cenario" in df_filtered.columns and df_filtered["cenario"].notna().any():
+        return str(df_filtered["cenario"].dropna().iloc[0])
+    return None
+
+
+def _active_strategy_review() -> pd.Series | None:
+    """Find the review_estrategias row for the currently selected strategy."""
+    review = _sheet("review_estrategias")
+    strategy = _active_strategy()
+    if review.empty or "strategy" not in review.columns or strategy is None:
+        return None
+    match = review[review["strategy"].astype(str) == str(strategy)]
+    if match.empty:
+        return None
+    return match.iloc[0]
+
 def insight(text: str) -> None:
     st.markdown(f'<div class="insight-box">💡 {text}</div>', unsafe_allow_html=True)
 
@@ -203,10 +238,22 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown("---")
 
+base_options = {
+    "gocase": "Gocase",
+    "gobeaute": "GoBeaute",
+}
+base_key = st.radio(
+    "Dashboard",
+    options=list(base_options.keys()),
+    format_func=lambda k: base_options[k],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
 uploaded = st.sidebar.file_uploader(
-    "Carregar arquivo Excel (.xlsx)",
+    f"Carregar arquivo Excel ({base_options[base_key]})",
     type=["xlsx"],
-    help="Faça upload do arquivo de recomendações. Se vazio, será usado o arquivo padrão da pasta data/.",
+    help="Se vazio, será usado o export mais recente da base selecionada.",
 )
 
 @st.cache_data(show_spinner="Carregando dados…")
@@ -217,7 +264,7 @@ if uploaded is not None:
     sheets = _load(uploaded)
     source_label = uploaded.name
 else:
-    default_path = detect_default_file()
+    default_path = detect_default_file(base_key)
     if default_path:
         sheets = _load(str(default_path))
         source_label = default_path.name
@@ -234,6 +281,7 @@ for w in load_warnings:
     st.sidebar.warning(w)
 
 df = prepare_recommendations(df_raw)
+df["base_dashboard"] = base_key
 
 # Alerta de consistência com metadata
 meta_alert = check_metadata_consistency(sheets, df)
@@ -249,6 +297,7 @@ filters = build_sidebar_filters(df)
 df_filtered = apply_filters(df, filters)
 
 st.sidebar.markdown("---")
+st.sidebar.caption(f"Base: **{base_options[base_key]}**")
 st.sidebar.caption(f"Fonte: `{source_label}`")
 st.sidebar.caption(f"**{len(df_filtered)}** de **{len(df)}** recomendações exibidas")
 
@@ -258,8 +307,20 @@ kpis_all = calculate_global_kpis(df)
 df_uf = calculate_uf_metrics(df_filtered)
 df_carrier = calculate_carrier_metrics(df_filtered)
 
+active_review_row = _active_strategy_review()
+if active_review_row is not None:
+    PMP_ATUAL_DASH = pd.to_numeric(active_review_row.get("PMP_baseline_total"), errors="coerce")
+    PMP_RECOMENDADO_DASH = pd.to_numeric(active_review_row.get("PMP_reco_total"), errors="coerce")
+    SLA_BASELINE_DASH = pd.to_numeric(active_review_row.get("SLA_baseline_total"), errors="coerce")
+    SLA_RECOMENDADO_DASH = pd.to_numeric(active_review_row.get("SLA_reco_total"), errors="coerce")
+else:
+    PMP_ATUAL_DASH = PMP_ATUAL_TOTAL
+    PMP_RECOMENDADO_DASH = PMP_RECOMENDADO_TOTAL
+    SLA_BASELINE_DASH = SLA_BASELINE_TOTAL
+    SLA_RECOMENDADO_DASH = SLA_RECOMENDADO_TOTAL
+
 # ── Header ────────────────────────────────────────────────────────────────────
-render_header(len(df_filtered), len(df), source_label)
+render_header(len(df_filtered), len(df), f"{base_options[base_key]} · {source_label}")
 
 if data_alerts:
     with st.expander("⚠️ Alertas de qualidade dos dados", expanded=False):
@@ -271,7 +332,7 @@ if df_filtered.empty:
     st.stop()
 
 # ── Abas ─────────────────────────────────────────────────────────────────────
-tabs = st.tabs([
+tab_labels = [
     "1 · Visão Executiva",
     "2 · Mapa Brasil",
     "3 · Ranking de Oportunidades",
@@ -280,7 +341,11 @@ tabs = st.tabs([
     "6 · Simulador de Rollout",
     "7 · Governança & Exportação",
     "8 · Dados Brutos",
-])
+    "9 · Estratégias",
+]
+if base_key == "gobeaute":
+    tab_labels.append("10 · GoBeaute Marcas")
+tabs = st.tabs(tab_labels)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -295,21 +360,21 @@ with tabs[0]:
 
     # ── KPIs primários ────────────────────────────────────────────────────────
     sec("Métricas executivas — PMP & SLA")
-    _ganho_abs = PMP_ATUAL_TOTAL - PMP_RECOMENDADO_TOTAL
-    _red_pct   = (PMP_RECOMENDADO_TOTAL / PMP_ATUAL_TOTAL - 1) * 100
-    _delta_sla = (SLA_RECOMENDADO_TOTAL - SLA_BASELINE_TOTAL) * 100
+    _ganho_abs = PMP_ATUAL_DASH - PMP_RECOMENDADO_DASH
+    _red_pct   = (PMP_RECOMENDADO_DASH / PMP_ATUAL_DASH - 1) * 100 if PMP_ATUAL_DASH else np.nan
+    _delta_sla = (SLA_RECOMENDADO_DASH - SLA_BASELINE_DASH) * 100
 
     kpi_row([
-        kpi("PMP Atual",        fmt_dias(PMP_ATUAL_TOTAL),
+        kpi("PMP Atual",        fmt_dias(PMP_ATUAL_DASH),
             badge="referência", badge_cls="b-blue", accent="#3498DB"),
-        kpi("PMP Recomendado",  fmt_dias(PMP_RECOMENDADO_TOTAL),
-            badge=f"▼ {PMP_RECOMENDADO_TOTAL - PMP_ATUAL_TOTAL:+.2f} d",
+        kpi("PMP Recomendado",  fmt_dias(PMP_RECOMENDADO_DASH),
+            badge=f"▼ {PMP_RECOMENDADO_DASH - PMP_ATUAL_DASH:+.2f} d",
             badge_cls="b-green", accent="#2ECC71"),
         kpi("Ganho de PMP",     fmt_dias(_ganho_abs),
             badge="redução no prazo médio", badge_cls="b-teal", accent="#1ABC9C"),
         kpi("Redução %",        f"{_red_pct:.1f}%",
             badge="vs. PMP atual", badge_cls="b-orange", accent="#E67E22"),
-        kpi("SLA Recomendado",  f"{SLA_RECOMENDADO_TOTAL*100:.1f}%",
+        kpi("SLA Recomendado",  f"{SLA_RECOMENDADO_DASH*100:.1f}%",
             badge=f"▲ +{_delta_sla:.1f} p.p.", badge_cls="b-purple", accent="#9B59B6"),
     ])
 
@@ -320,7 +385,7 @@ with tabs[0]:
     _aum_share = kpis["n_aumentos"] / kpis["n_total"] * 100 if kpis["n_total"] else 0
 
     kpi_row([
-        kpi("SLA Baseline",     f"{SLA_BASELINE_TOTAL*100:.1f}%",
+        kpi("SLA Baseline",     f"{SLA_BASELINE_DASH*100:.1f}%",
             badge="pré-recomendação", badge_cls="b-gray", accent="#5D6D7E", size="md"),
         kpi("Share Impactado",  fmt_share(_share_pct),
             badge="da base de pedidos", badge_cls="b-blue", accent="#2980B9", size="md"),
@@ -863,13 +928,13 @@ with tabs[7]:
 
     with col_info2:
         meta = sheets.get("metadata", pd.DataFrame())
-        kpis_t = sheets.get("kpis_total", pd.DataFrame())
+        kpis_t = sheets.get("kpis_total", sheets.get("kpis", pd.DataFrame()))
         if not meta.empty:
             st.markdown("**Metadata do arquivo**")
-            st.dataframe(meta, use_container_width=True)
+            st.dataframe(meta.astype(str), use_container_width=True)
         if not kpis_t.empty:
             st.markdown("**KPIs do arquivo (kpis_total)**")
-            st.dataframe(kpis_t, use_container_width=True)
+            st.dataframe(kpis_t.astype(str), use_container_width=True)
 
     st.markdown("---")
     st.markdown("**Alertas de qualidade**")
@@ -894,3 +959,234 @@ with tabs[7]:
         to_csv_download(df),
         "base_tratada.csv", "text/csv",
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ABA 9 — ESTRATÉGIAS
+# ════════════════════════════════════════════════════════════════════════════════
+with tabs[8]:
+    st.markdown("### Estratégias de SLA e PMP")
+    insight(
+        "Esta aba lê diretamente as abas geradas pelos notebooks "
+        "(review_estrategias, df_estrategias, kpis e streamlit_input). "
+        "Use-a para comparar os cenários combinados, inclusive as variantes com e sem UF SP."
+    )
+
+    review = _sheet("review_estrategias")
+    df_estrategias = _sheet("df_estrategias")
+    kpis_file = _sheet("kpis")
+    streamlit_input = _sheet("streamlit_input")
+
+    if review.empty:
+        st.warning("Aba `review_estrategias` não encontrada no arquivo carregado.")
+    else:
+        numeric_cols = [
+            "selected_groups", "selected_orders",
+            "SLA_baseline_total", "SLA_reco_total", "Delta_SLA_total",
+            "PMP_baseline_total", "PMP_reco_total", "Delta_PMP_total",
+            "portfolio_sla_est", "portfolio_pmp_est",
+        ]
+        for col in numeric_cols:
+            if col in review.columns:
+                review[col] = pd.to_numeric(review[col], errors="coerce")
+
+        active = _active_strategy_review()
+        if active is not None:
+            st.caption(f"Estratégia ativa no dashboard: `{active.get('strategy')}`")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(
+                kpi("SLA cenário", fmt_pct(active.get("SLA_reco_total")),
+                    badge=f"Δ {active.get('Delta_SLA_total', np.nan) * 100:+.2f} p.p."
+                    if pd.notna(active.get("Delta_SLA_total", np.nan)) else "",
+                    badge_cls="b-purple", accent="#9B59B6", size="md"),
+                unsafe_allow_html=True,
+            )
+            c2.markdown(
+                kpi("PMP cenário", fmt_dias(active.get("PMP_reco_total")),
+                    badge=f"Δ {active.get('Delta_PMP_total', np.nan):+.2f} d"
+                    if pd.notna(active.get("Delta_PMP_total", np.nan)) else "",
+                    badge_cls="b-teal", accent="#1ABC9C", size="md"),
+                unsafe_allow_html=True,
+            )
+            c3.markdown(
+                kpi("Grupos selecionados", fmt_num(active.get("selected_groups")),
+                    badge="estratégia", badge_cls="b-blue", accent="#2980B9", size="md"),
+                unsafe_allow_html=True,
+            )
+            c4.markdown(
+                kpi("Pedidos cobertos", fmt_num(active.get("selected_orders")),
+                    badge="base histórica", badge_cls="b-orange", accent="#E67E22", size="md"),
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("#### Review das estratégias")
+        display_cols = [
+            c for c in [
+                "strategy", "excluded_ufs", "reached_target",
+                "selected_groups", "selected_orders",
+                "SLA_baseline_total", "SLA_reco_total", "Delta_SLA_total",
+                "PMP_baseline_total", "PMP_reco_total", "Delta_PMP_total",
+                "portfolio_sla_est", "portfolio_pmp_est",
+            ] if c in review.columns
+        ]
+        sort_cols = [c for c in ["reached_target", "Delta_PMP_total", "SLA_reco_total"] if c in review.columns]
+        if sort_cols:
+            review_show = review.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        else:
+            review_show = review
+        st.dataframe(review_show[display_cols], use_container_width=True)
+
+        if {"PMP_reco_total", "SLA_reco_total", "strategy"}.issubset(review.columns):
+            plot_df = review.dropna(subset=["PMP_reco_total", "SLA_reco_total"]).copy()
+            if not plot_df.empty:
+                size_col = "selected_orders" if "selected_orders" in plot_df.columns else None
+                fig = px.scatter(
+                    plot_df,
+                    x="PMP_reco_total",
+                    y="SLA_reco_total",
+                    color="strategy",
+                    size=size_col,
+                    hover_data=[c for c in ["excluded_ufs", "selected_groups", "Delta_PMP_total"] if c in plot_df.columns],
+                    labels={
+                        "PMP_reco_total": "PMP recomendado",
+                        "SLA_reco_total": "SLA recomendado",
+                        "strategy": "Estratégia",
+                    },
+                    title="Fronteira prática: SLA x PMP por estratégia",
+                )
+                fig.add_hline(y=0.96, line_dash="dash", line_color="#F39C12", annotation_text="Target 96%")
+                fig.update_layout(height=460, margin=dict(l=10, r=10, t=55, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.markdown("#### KPIs por estratégia")
+        if kpis_file.empty:
+            st.info("Aba `kpis` não encontrada.")
+        else:
+            st.dataframe(kpis_file.astype(str), use_container_width=True, height=360)
+    with col_s2:
+        st.markdown("#### Base de estratégias")
+        if df_estrategias.empty:
+            st.info("Aba `df_estrategias` não encontrada.")
+        else:
+            st.dataframe(df_estrategias.head(300), use_container_width=True, height=360)
+
+    st.markdown("---")
+    export_tabs = {
+        "review_estrategias": review,
+        "kpis": kpis_file,
+        "df_estrategias": df_estrategias,
+        "streamlit_input": streamlit_input,
+    }
+    export_tabs = {k: v for k, v in export_tabs.items() if isinstance(v, pd.DataFrame) and not v.empty}
+    if export_tabs:
+        st.download_button(
+            "⬇️ Baixar pacote de estratégias (.xlsx)",
+            data=to_excel_download(export_tabs),
+            file_name=f"estrategias_{base_key}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ABA 10 — GOBEAUTE MARCAS
+# ════════════════════════════════════════════════════════════════════════════════
+if base_key == "gobeaute":
+    with tabs[9]:
+        st.markdown("### 🧴 GoBeaute — Marcas e Canais")
+        insight(
+            "Esta visão usa a base bruta da GoBeaute para abrir a leitura por Canal de Vendas/marca, "
+            "algo que não existe na Gocase. O carregamento é opcional porque a base bruta é grande."
+        )
+
+        load_brand = st.checkbox("Carregar base bruta para análise de marcas", value=False)
+        raw_dir = pathlib.Path(__file__).parent.parent / "base_gobeaute"
+        raw_files = []
+        if raw_dir.exists():
+            raw_files = [
+                p for p in raw_dir.glob("*.xlsx")
+                if not p.name.startswith("~$") and not p.name.lower().startswith("depara")
+            ]
+        raw_file = max(raw_files, key=lambda p: p.stat().st_mtime) if raw_files else None
+
+        if raw_file is None:
+            st.warning("Nenhuma base bruta GoBeaute encontrada em `base_gobeaute/`.")
+        elif not load_brand:
+            st.info(f"Base detectada: `{raw_file.name}`. Marque a opção acima para carregar a análise.")
+        else:
+            brand_cols = [
+                "Canal de Vendas", "Praça", "Transportadora", "UF", "Cidade do Destinatário",
+                "Status Transportador", "Performance", "Performance Transp.",
+                "Custo Frete", "Preço Frete", "Valor da Nota",
+                "Prazo transportadora dias úteis",
+            ]
+
+            @st.cache_data(show_spinner="Carregando base bruta GoBeaute…")
+            def _load_brand_base(path: str) -> pd.DataFrame:
+                raw = pd.read_excel(path, usecols=lambda c: c in brand_cols, engine="openpyxl")
+                raw.columns = raw.columns.map(lambda c: str(c).strip())
+                raw["marca"] = (
+                    raw.get("Canal de Vendas", pd.Series(index=raw.index, dtype=object))
+                    .astype(str).str.strip().str.split("-").str[0].str.upper()
+                )
+                for col in ["Custo Frete", "Preço Frete", "Valor da Nota", "Prazo transportadora dias úteis"]:
+                    if col in raw.columns:
+                        raw[col] = pd.to_numeric(raw[col], errors="coerce")
+                return raw
+
+            raw_brand = _load_brand_base(str(raw_file))
+            st.caption(f"Base bruta: `{raw_file.name}` · {len(raw_brand):,} linhas")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(kpi("Pedidos brutos", fmt_num(len(raw_brand)), size="md"), unsafe_allow_html=True)
+            c2.markdown(kpi("Marcas/canais", fmt_num(raw_brand["marca"].nunique()), size="md", accent="#9B59B6"), unsafe_allow_html=True)
+            c3.markdown(kpi("UFs", fmt_num(raw_brand["UF"].nunique()) if "UF" in raw_brand.columns else "-", size="md", accent="#2ECC71"), unsafe_allow_html=True)
+            c4.markdown(kpi("Transportadoras", fmt_num(raw_brand["Transportadora"].nunique()) if "Transportadora" in raw_brand.columns else "-", size="md", accent="#F39C12"), unsafe_allow_html=True)
+
+            brand = raw_brand.groupby("marca", dropna=False).agg(
+                pedidos=("marca", "count"),
+                prazo_medio=("Prazo transportadora dias úteis", "mean"),
+                custo_frete=("Custo Frete", "mean"),
+                preco_frete=("Preço Frete", "mean"),
+                ticket_medio=("Valor da Nota", "mean"),
+            ).reset_index().sort_values("pedidos", ascending=False)
+            brand["share"] = brand["pedidos"] / len(raw_brand)
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.plotly_chart(
+                    build_ranking_chart(brand, "marca", "pedidos", "Top marcas/canais por volume", top_n=15, color=AZUL),
+                    use_container_width=True,
+                )
+            with col_b:
+                st.plotly_chart(
+                    build_ranking_chart(brand, "marca", "prazo_medio", "Prazo médio por marca", top_n=15, color=LARANJA),
+                    use_container_width=True,
+                )
+
+            if {"marca", "UF"}.issubset(raw_brand.columns):
+                top_brands = brand.head(10)["marca"].tolist()
+                brand_uf = (
+                    raw_brand[raw_brand["marca"].isin(top_brands)]
+                    .groupby(["marca", "UF"]).size().reset_index(name="pedidos")
+                )
+                st.markdown("**Marca × UF**")
+                st.dataframe(
+                    brand_uf.sort_values("pedidos", ascending=False).head(100),
+                    use_container_width=True,
+                )
+
+            if {"marca", "Transportadora"}.issubset(raw_brand.columns):
+                brand_carrier = (
+                    raw_brand[raw_brand["marca"].isin(brand.head(10)["marca"])]
+                    .groupby(["marca", "Transportadora"]).size().reset_index(name="pedidos")
+                    .sort_values("pedidos", ascending=False)
+                )
+                st.markdown("**Mix de transportadoras por marca**")
+                st.dataframe(brand_carrier, use_container_width=True)
+
+            st.markdown("**Resumo por marca/canal**")
+            st.dataframe(brand, use_container_width=True)

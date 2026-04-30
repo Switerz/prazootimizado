@@ -10,6 +10,13 @@ def build_sidebar_filters(df: pd.DataFrame) -> dict:
 
     filters: dict = {}
 
+    # Estratégia / cenário
+    if "cenario" in df.columns:
+        cenarios = sorted(df["cenario"].dropna().unique().tolist())
+        default = [c for c in cenarios if c == "max_pmp"] or []
+        cenarios_sel = st.sidebar.multiselect("Estratégia", cenarios, default=default)
+        filters["cenario"] = cenarios_sel
+
     # UF
     if "uf_primaria" in df.columns or "uf" in df.columns:
         uf_col = "uf_primaria" if "uf_primaria" in df.columns else "uf"
@@ -91,6 +98,9 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     if filters.get("uf"):
         uf_col = "uf_primaria" if "uf_primaria" in result.columns else "uf"
         result = result[result[uf_col].isin(filters["uf"])]
+
+    if filters.get("cenario") and "cenario" in result.columns:
+        result = result[result["cenario"].isin(filters["cenario"])]
 
     if filters.get("transportadora"):
         result = result[result["transportadora"].isin(filters["transportadora"])]
